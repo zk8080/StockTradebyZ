@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+import json
+
+import httpx
 from openai import OpenAI
 
 from base_reviewer import BaseReviewer
@@ -108,7 +111,21 @@ class ModelReviewer(BaseReviewer):
             sys.exit(1)
 
         base_url = self.config.get("base_url") or None
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # Optional request header overrides (e.g. to bypass Cloudflare bot checks)
+        # Example: REVIEW_HEADERS_JSON='{"User-Agent":"Mozilla/5.0"}'
+        headers_json = _env_first("REVIEW_HEADERS_JSON")
+        default_headers = {"User-Agent": "Mozilla/5.0"}
+        extra_headers: dict[str, str] = {}
+        if headers_json:
+            try:
+                extra_headers = json.loads(headers_json)
+            except Exception as exc:
+                raise ValueError(f"Invalid REVIEW_HEADERS_JSON: {exc}")
+        headers = {**default_headers, **{k: str(v) for k, v in extra_headers.items()}}
+
+        http_client = httpx.Client(headers=headers, timeout=60.0)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
 
     @staticmethod
     def image_to_data_url(path: Path) -> str:
