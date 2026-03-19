@@ -3,7 +3,7 @@ numpy==2.4.3
 openai==1.66.3
 pandas==2.2.3
 plotly==6.5.0
-protobuf==7.34.0
+protobuf==6.32.1
 PyYAML==6.0.3
 streamlit==1.55.0
 tqdm==4.67.3
