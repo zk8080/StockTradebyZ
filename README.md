@@ -5,7 +5,7 @@
 - 使用 Tushare 拉取股票日线数据
 - 用量化规则做初选（目前只实现了B1选股）
 - 导出候选股票 K 线图
-- 调用 Gemini 对图表进行 AI 复评打分
+- 调用 OpenAI 兼容视觉模型对图表进行 AI 复评打分
 
 ---
 
@@ -24,7 +24,7 @@
 1. 下载 K 线数据（pipeline.fetch_kline）
 2. 量化初选（pipeline.cli preselect）
 3. 导出候选图表（dashboard/export_kline_charts.py）
-4. Gemini 复评（agent/gemini_review.py）
+4. OpenAI 兼容复评（agent/model_review.py）
 5. 打印推荐结果（读取 suggestion.json）
 
 输出主链路：
@@ -40,8 +40,8 @@
 
 - [pipeline](pipeline)：数据抓取与量化初选
 - [dashboard](dashboard)：看盘界面与图表导出
-- [agent](agent)：LLM 评审逻辑（Gemini）
-- [config](config)：抓取、初选、Gemini 复评配置
+- [agent](agent)：LLM 评审逻辑（OpenAI 兼容）
+- [config](config)：抓取、初选、模型复评配置
 - [data](data)：运行数据与结果
 - [run_all.py](run_all.py)：全流程一键入口
 
@@ -68,7 +68,10 @@ Windows PowerShell（永久写入）：
 
 ~~~powershell
 [Environment]::SetEnvironmentVariable("TUSHARE_TOKEN", "你的TushareToken", "User")
-[Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "你的GeminiApiKey", "User")
+[Environment]::SetEnvironmentVariable("REVIEW_API_KEY", "你的OpenAI兼容ApiKey", "User")
+[Environment]::SetEnvironmentVariable("LC_OPENAI_API_KEY", "你的OpenAI兼容ApiKey(可选)", "User")
+[Environment]::SetEnvironmentVariable("REVIEW_BASE_URL", "https://api.openai.com/v1", "User")  # 可选
+[Environment]::SetEnvironmentVariable("REVIEW_MODEL", "gpt-4o-mini", "User")  # 可选
 ~~~
 
 写入后请重开终端，环境变量才会在新会话中生效。
@@ -134,19 +137,19 @@ python dashboard/export_kline_charts.py
 
 输出到 data/kline/选股日期，图像命名为 代码_day.jpg。
 
-### 步骤 4：Gemini 图表复评
+### 步骤 4：OpenAI 兼容图表复评
 
 ~~~bash
-python agent/gemini_review.py
+python agent/model_review.py
 ~~~
 
 可选参数示例：
 
 ~~~bash
-python agent/gemini_review.py --config config/gemini_review.yaml
+python agent/model_review.py --config config/model_review.yaml
 ~~~
 
-配置见 [config/gemini_review.yaml](config/gemini_review.yaml)。
+配置见 [config/model_review.yaml](config/model_review.yaml)。
 
 读取候选与图表后，输出：
 
@@ -170,9 +173,11 @@ python agent/gemini_review.py --config config/gemini_review.yaml
 
 ### 6.3 复评层
 
-在 [config/gemini_review.yaml](config/gemini_review.yaml) 中可调整：
+在 [config/model_review.yaml](config/model_review.yaml) 中可调整：
 
 - model：模型名称
+- base_url：OpenAI 兼容 API 地址（可选）
+- api_style：responses 或 chat_completions
 - request_delay：调用间隔（防限流）
 - skip_existing：是否断点续跑
 - suggest_min_score：推荐分数门槛
@@ -198,7 +203,48 @@ data/review/日期/suggestion.json
 
 ---
 
-## 7. 常见问题
+## 7. Docker 部署
+
+### 7.1 构建与运行
+
+~~~bash
+docker compose build
+docker compose up
+~~~
+
+默认会执行 `python run_all.py`，并将 `./data` 挂载到容器内的 `/app/data`。
+
+### 7.2 运行单独步骤
+
+示例：只跑复评
+
+~~~bash
+docker compose run --rm app python agent/model_review.py
+~~~
+
+### 7.3 环境变量
+
+容器通过环境变量读取配置，推荐使用 `.env`（参考 [.env.example](.env.example)）：
+
+- TUSHARE_TOKEN
+- REVIEW_API_KEY 或 LC_OPENAI_API_KEY
+- REVIEW_BASE_URL（可选）
+- REVIEW_MODEL（可选）
+- REVIEW_API_STYLE（responses | chat_completions，可选）
+
+---
+
+## 8. 冒烟测试
+
+用一张本地图像验证视觉调用与 JSON 解析：
+
+~~~bash
+python agent/smoke_test_vision.py --image path/to/your_image.jpg
+~~~
+
+---
+
+## 9. 常见问题
 
 ### Q1：fetch_kline 报 token 错误
 
@@ -210,9 +256,10 @@ data/review/日期/suggestion.json
 - 确认已安装 kaleido
 - 重新安装：pip install -U kaleido
 
-### Q3：Gemini 运行失败
+### Q3：模型复评运行失败
 
-- 检查 GEMINI_API_KEY 是否设置
+- 检查 REVIEW_API_KEY 或 LC_OPENAI_API_KEY 是否设置
+- 如使用私有兼容接口，确认 REVIEW_BASE_URL 是否正确
 - 观察是否命中限流，可提高 request_delay
 
 ### Q4：没有候选股票

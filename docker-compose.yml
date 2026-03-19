@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    container_name: stocktradebyz
+    environment:
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN}
+      REVIEW_API_KEY: ${REVIEW_API_KEY}
+      LC_OPENAI_API_KEY: ${LC_OPENAI_API_KEY}
+      REVIEW_BASE_URL: ${REVIEW_BASE_URL}
+      REVIEW_MODEL: ${REVIEW_MODEL}
+      REVIEW_API_STYLE: ${REVIEW_API_STYLE}
+    volumes:
+      - ./data:/app/data
+    command: ["python", "run_all.py"]

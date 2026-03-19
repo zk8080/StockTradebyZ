@@ -1,0 +1,14 @@
+# model_review.example.yaml
+# 示例配置（不含任何密钥）
+
+candidates: data/candidates/candidates_latest.json
+kline_dir: data/kline
+output_dir: data/review
+prompt_path: agent/prompt.md
+
+model: gpt-4o-mini
+base_url: "https://api.openai.com/v1"  # OpenAI 兼容接口可替换
+api_style: responses                   # responses | chat_completions
+request_delay: 5
+skip_existing: false
+suggest_min_score: 4.0
