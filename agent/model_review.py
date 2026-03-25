@@ -28,6 +28,7 @@ import argparse
 import base64
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model": "gpt-4o-mini",
     "base_url": "",
     "api_style": "responses",  # responses | chat_completions
+    # Rate limit / robustness
     "request_delay": 5,
+    "max_retries": 3,
+    "retry_base_delay": 2.0,
     "skip_existing": False,
     "suggest_min_score": 4.0,
 }
@@ -88,6 +92,20 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
     cfg["base_url"] = _env_first("REVIEW_BASE_URL", "OPENAI_BASE_URL", "LC_OPENAI_BASE_URL") or cfg.get("base_url", "")
     cfg["model"] = _env_first("REVIEW_MODEL") or cfg.get("model", "gpt-4o-mini")
     cfg["api_style"] = _env_first("REVIEW_API_STYLE") or cfg.get("api_style", "responses")
+
+    # Retries (override via env for Docker)
+    mr = _env_first("REVIEW_MAX_RETRIES")
+    if mr:
+        try:
+            cfg["max_retries"] = int(mr)
+        except Exception:
+            pass
+    rbd = _env_first("REVIEW_RETRY_BASE_DELAY")
+    if rbd:
+        try:
+            cfg["retry_base_delay"] = float(rbd)
+        except Exception:
+            pass
 
     # BaseReviewer 依赖这些路径字段为 Path 对象
     cfg["candidates"] = _resolve_cfg_path(cfg["candidates"])
@@ -205,17 +223,37 @@ class ModelReviewer(BaseReviewer):
         image_url = self.image_to_data_url(day_chart)
         api_style = str(self.config.get("api_style", "responses")).strip().lower()
 
-        if api_style == "chat_completions":
-            response_text = self._call_chat_completions(prompt, user_text, image_url)
-        else:
-            response_text = self._call_responses(prompt, user_text, image_url)
+        max_retries = int(self.config.get("max_retries", 3) or 3)
+        base_delay = float(self.config.get("retry_base_delay", 2.0) or 2.0)
 
-        if not response_text:
-            raise RuntimeError(f"模型返回空响应，无法解析 JSON（code={code}）")
+        last_err: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                if api_style == "chat_completions":
+                    response_text = self._call_chat_completions(prompt, user_text, image_url)
+                else:
+                    response_text = self._call_responses(prompt, user_text, image_url)
 
-        result = self.extract_json(response_text)
-        result["code"] = code
-        return result
+                if not response_text:
+                    raise RuntimeError(f"模型返回空响应，无法解析 JSON（code={code}）")
+
+                result = self.extract_json(response_text)
+                result["code"] = code
+                return result
+            except Exception as e:
+                last_err = e
+                # Retry on transient upstream errors or parse hiccups
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    print(f"[WARN] {code} 第{attempt}次失败：{e}，{delay:.1f}s 后重试...", flush=True)
+                    time.sleep(delay)
+                    continue
+                raise
+
+        # should never reach
+        if last_err:
+            raise last_err
+        raise RuntimeError("Unknown error")
 
 
 def main() -> None:

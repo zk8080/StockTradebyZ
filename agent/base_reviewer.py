@@ -42,14 +42,47 @@ class BaseReviewer:
 
     @staticmethod
     def extract_json(text: str) -> dict:
+        """Extract the first JSON object from model output.
+
+        Tolerates common LLM formatting issues:
+        - ```json code blocks
+        - leading/trailing text
+        - trailing commas
+        - single quotes (best-effort)
+        """
+
+        # 1) Prefer fenced JSON blocks
         code_block = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if code_block:
             text = code_block.group(1)
+
+        # 2) Slice to first {...}
         start = text.find("{")
         end = text.rfind("}") + 1
         if start == -1 or end == 0:
             raise ValueError(f"未能在模型输出中找到 JSON 对象:\n{text}")
-        return json.loads(text[start:end])
+        candidate = text[start:end].strip()
+
+        # 3) Parse strictly first
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+        # 4) Best-effort repairs
+        repaired = candidate
+        # Remove trailing commas before } or ]
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+
+        # Convert common single-quote JSON to double-quote (conservative)
+        # Only if it looks like JSON-ish with keys in single quotes
+        if "'" in repaired and '"' not in repaired:
+            repaired = repaired.replace("'", '"')
+
+        try:
+            return json.loads(repaired)
+        except Exception as e:
+            raise ValueError(f"模型输出 JSON 解析失败: {e}\n原始片段:\n{candidate}\n\n修复后片段:\n{repaired}")
 
     def review_stock(self, code: str, day_chart: Path, prompt: str) -> dict:
         """子类需实现此方法，调用具体的 LLM 进行打分，并返回 JSON 解析字典。"""

@@ -109,8 +109,15 @@ def main() -> None:
     # ── 步骤 1：拉取 K 线数据 ─────────────────────────────────────────
     if start <= 1:
         _run(
-            "1/4  拉取 K 线数据（fetch_kline）",
-            [PYTHON, "-m", "pipeline.fetch_kline"],
+            "1/4  拉取 K 线数据（tdx-api fetch_kline_tdx_api 全A股）",
+            [
+                PYTHON,
+                str(ROOT / "pipeline" / "fetch_kline_tdx_api.py"),
+                "--all-a",
+                "--limit", "200",
+                "--concurrency", "20",
+                "--skip-existing",
+            ],
         )
 
     # ── 步骤 2：量化初选 ─────────────────────────────────────────────
