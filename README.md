@@ -2,18 +2,25 @@
 
 一个面向 A 股的半自动选股项目：
 
-- 使用 Tushare 拉取股票日线数据
-- 用量化规则做初选（目前只实现了B1选股）
+- 使用 **TDX API** 作为当前主数据源拉取股票日线数据
+- 用量化规则做初选（当前主策略为 B1）
 - 导出候选股票 K 线图
 - 调用 OpenAI 兼容视觉模型对图表进行 AI 复评打分
+- 支持单股 AI 点评与后续飞书多维表格同步
 
 ---
 
-## 更新说明
+## 当前状态（重要）
 
-- 推翻了旧版选股模式（各式各样的B1太麻烦了）
-- 新加入了AI看图打分精选功能（是的，不用再自己看图了）
-- 目前只支持B1选股，后续Z哥讲了砖型图10张图后，会更新砖型图精选
+- 当前主数据源已经固定为 **TDX API**，不再以 Tushare 作为默认主抓取源
+- 当前主流程是：`TDX 日线刷新 → B1 初选 → 候选图导出 → AI 复评 → 生成 Top10 产物`
+- `run_all.py` 当前**只负责生成本地产物与打印推荐结果**，**不负责自动写入飞书多维表格**
+- 若需要形成完整闭环，应在主流程后继续执行：
+  - Top10 payload 生成
+  - `选股明细` 写入
+  - `每日汇总` 写入
+  - 写表结果回查
+- 已支持单股 AI 点评闭环所需产物生成（JSON + Bitable payload）
 
 ---
 
@@ -21,18 +28,20 @@
 
 完整流程对应 [run_all.py](run_all.py)：
 
-1. 下载 K 线数据（pipeline.fetch_kline）
-2. 量化初选（pipeline.cli preselect）
-3. 导出候选图表（dashboard/export_kline_charts.py）
-4. OpenAI 兼容复评（agent/model_review.py）
-5. 打印推荐结果（读取 suggestion.json）
+1. 下载 K 线数据（`pipeline/fetch_kline_tdx_api.py`，当前主入口）
+2. 量化初选（`pipeline.cli preselect`）
+3. 导出候选图表（`dashboard/export_kline_charts.py`）
+4. OpenAI 兼容复评（`agent/model_review.py`）
+5. 打印推荐结果（读取 `suggestion.json`）
 
 输出主链路：
 
-- data/raw：原始日线 CSV
-- data/candidates：初选候选列表
-- data/kline/日期：候选图表
-- data/review/日期：AI 单股评分与汇总建议
+- `data/raw`：原始日线 CSV
+- `data/candidates`：初选候选列表
+- `data/kline/日期`：候选图表
+- `data/review/日期`：AI 单股评分与汇总建议
+- `data/meta/bitable_top10_<date>.json`：Top10 写表 payload（需单独生成）
+- `data/review_single/<date>`：单股 AI 点评结果
 
 ---
 
@@ -93,26 +102,45 @@ python run_all.py --start-from 3
 
 参数说明：
 
-- --skip-fetch：跳过数据下载，直接进入初选
-- --start-from N：从第 N 步开始执行（1 到 4）
+- `--skip-fetch`：跳过数据下载，直接进入初选
+- `--start-from N`：从第 N 步开始执行（1 到 4）
+
+### 3.5 重要说明：`run_all.py` 不负责写飞书表格
+`run_all.py` 跑完后，只表示以下产物已经生成：
+- `data/review/<date>/suggestion.json`
+- 候选图
+- 复评 JSON
+
+如果你要形成“盘后完整闭环”，还需要继续执行：
+1. 生成 Top10 payload：
+
+~~~bash
+python3 scripts/sync_top10_to_bitable.py --pick-date 2026-03-24 --top-n 10
+~~~
+
+2. 将 Top10 写入飞书 `选股明细`
+3. 将汇总写入飞书 `每日汇总`
+4. 对两张表进行回查确认
+
+也就是说：
+> `run_all.py` 完成 ≠ 飞书写表闭环完成
 
 ---
 
 ## 4. 分步运行攻略
 
-### 步骤 1：拉取 K 线
+### 步骤 1：拉取 K 线（当前主入口：TDX）
 
 ~~~bash
-python -m pipeline.fetch_kline
+python pipeline/fetch_kline_tdx_api.py --all-a --limit 200 --concurrency 20
 ~~~
 
-配置见 [config/fetch_kline.yaml](config/fetch_kline.yaml)：
+说明：
+- 当前项目默认主抓取入口是 `pipeline/fetch_kline_tdx_api.py`
+- 输出到 `data/raw/<code>.csv`
+- 当前 raw 契约核心字段为：`date, open, high, low, close, volume`
 
-- start、end：抓取区间
-- stocklist：股票池文件
-- exclude_boards：排除板块（gem、star、bj）
-- out：输出目录（默认 data/raw）
-- workers：并发线程数
+> 旧的 `pipeline.fetch_kline` / Tushare 抓取逻辑不再作为当前主流程默认入口。
 
 ### 步骤 2：量化初选
 
@@ -203,34 +231,47 @@ data/review/日期/suggestion.json
 
 ---
 
-## 7. Docker 部署
+## 7. Docker / compose 运行说明
 
-### 7.1 构建与运行
+### 7.1 当前推荐运行方式
+该项目当前通常与外层 `deploy/docker-compose.yml` 配合使用，典型容器命令为：
 
 ~~~bash
-docker compose build
-docker compose up
+cd ../deploy
+
+docker-compose exec -T stocktradebyz python pipeline/fetch_kline_tdx_api.py --all-a --limit 200 --concurrency 20
+
+docker-compose exec -T stocktradebyz python -m pipeline.cli preselect
+
+docker-compose exec -T stocktradebyz python dashboard/export_kline_charts.py
+
+docker-compose exec -T stocktradebyz python run_all.py --start-from 4
 ~~~
 
-默认会执行 `python run_all.py`，并将 `./data` 挂载到容器内的 `/app/data`。
-
 ### 7.2 运行单独步骤
-
 示例：只跑复评
 
 ~~~bash
-docker compose run --rm app python agent/model_review.py
+cd ../deploy
+docker-compose exec -T stocktradebyz python agent/model_review.py
 ~~~
 
-### 7.3 环境变量
+### 7.3 单股点评闭环产物生成
+示例：
 
-容器通过环境变量读取配置，推荐使用 `.env`（参考 [.env.example](.env.example)）：
+~~~bash
+cd ../deploy
+docker-compose exec -T stocktradebyz python /app/scripts/run_single_review_flow.py --code 600644 --pick-date 2026-03-24
+~~~
 
-- TUSHARE_TOKEN
-- REVIEW_API_KEY 或 LC_OPENAI_API_KEY
-- REVIEW_BASE_URL（可选）
-- REVIEW_MODEL（可选）
-- REVIEW_API_STYLE（responses | chat_completions，可选）
+### 7.4 环境变量
+容器通过 `.env` 或环境变量读取配置，当前重点通常是：
+
+- `REVIEW_API_KEY` 或 `LC_OPENAI_API_KEY`
+- `REVIEW_BASE_URL`（可选）
+- `REVIEW_MODEL`（可选）
+- `REVIEW_API_STYLE`（responses | chat_completions，可选）
+- `TDX_API_BASE_URL`（由外层 compose 注入）
 
 ---
 
