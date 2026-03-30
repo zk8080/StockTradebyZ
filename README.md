@@ -3,7 +3,7 @@
 一个面向 A 股的半自动选股项目：
 
 - 使用 **TDX API** 作为当前主数据源拉取股票日线数据
-- 用量化规则做初选（当前主策略为 B1）
+- 用量化规则做初选（当前正式主策略为启动版 `B1`，旧确认版保留为 `b1_legacy`）
 - 导出候选股票 K 线图
 - 调用 OpenAI 兼容视觉模型对图表进行 AI 复评打分
 - 支持单股 AI 点评与后续飞书多维表格同步
@@ -13,7 +13,9 @@
 ## 当前状态（重要）
 
 - 当前主数据源已经固定为 **TDX API**，不再以 Tushare 作为默认主抓取源
-- 当前主流程是：`TDX 日线刷新 → B1 初选 → 候选图导出 → AI 复评 → 生成 Top10 产物`
+- 当前主流程是：`TDX 日线刷新 → 正式 B1 初选 → 候选图导出 → AI 复评 → 生成 Top10 产物`
+- 当前正式 `B1` 是原先的启动/早期 `B1-E` 逻辑；旧确认版 `B1` 已下沉为 `b1_legacy`，默认仅供对比研究
+- 当前正式 `B1` 的执行口径可先记成一句话：**低位 J + 涨放跌缩 + 知行线不坏 + 允许一次缩量轻破**
 - `run_all.py` 当前**只负责生成本地产物与打印推荐结果**，**不负责自动写入飞书多维表格**
 - 若需要形成完整闭环，应在主流程后继续执行：
   - Top10 payload 生成
@@ -146,6 +148,7 @@ python pipeline/fetch_kline_tdx_api.py --all-a --limit 200 --concurrency 20
 
 ~~~bash
 python -m pipeline.cli preselect
+python -m pipeline.cli b1-eval --code 300683 --date 2026-03-23
 ~~~
 
 可选参数示例：
@@ -196,8 +199,36 @@ python agent/model_review.py --config config/model_review.yaml
 ### 6.2 初选层
 
 - top_m 决定流动性股票池大小
-- b1.enabled、brick.enabled 控制策略开关
+- `b1.enabled` 控制当前正式 B1（原 B1-E）
+- `b1_legacy.enabled` 控制 legacy / 确认版旧 B1，默认关闭
+- brick.enabled 控制砖型图策略开关
 - 可先只开一个策略做回放验证
+
+#### 当前正式 B1 快速口径
+
+- 低位 `J`：`J < 15` 或 `J <= 历史 10% 分位`
+- 知行线方向：`zxdq > zxdkx`
+- 最近 `5` 天最多允许 `1` 天 `close < zxdkx`，且该跌破必须是**缩量轻破**
+- 排除最近 `20` 天明显放量派发与最近 `5` 天放量跌破 `zxdkx`
+
+#### 当前正式 B1 量价定义
+
+- 放量上涨日：`close > prev_close and close > open and volume > vol_ma5 * 1.3`
+- 缩量下跌日：`close < prev_close and volume < vol_ma5 * 0.95 and ret > -0.03`
+
+#### 当前正式 B1 评分重点
+
+- `zx_retest`: 30
+- `down_shrink`: 25
+- `up_expand`: 25
+- `volume_alignment`: 20
+- `center_uplift`: 0
+
+其中 `volume_alignment` 会额外观察：
+- `up_expand_avg_vol / down_shrink_avg_vol`
+- 该直接对比明显强于 `1.0` 时，上调一档；若弱于 `1.0`，下调一档
+
+> 当前正式 B1 重心是“知行线不被有效破坏 + 量价转顺”，而不是价格重心已经抬高。
 
 ### 6.3 复评层
 
@@ -228,6 +259,19 @@ data/review/日期/suggestion.json
 - recommendations：最终推荐（按分数排序）
 - excluded：未达门槛代码
 - min_score_threshold：推荐门槛
+
+### 正式 B1 后验复盘建议（简版）
+
+当前正式 B1 建议按交易日窗口做后验观察：
+- `T+1`：看是否继续有承接、是否立刻被放量压回
+- `T+3`：看是否形成“涨放跌缩”与知行线未坏的基本节奏
+- `T+5`：作为第一阶段正式收口点，重点记录涨跌幅、区间最高涨幅、区间最大回撤、是否有效跌破知行线、是否出现放量派发
+- `T+10`：做补充观察，识别慢启动 / 延迟兑现样本
+
+对正式 B1，复盘重点不是只看最终涨幅，而是先看：
+- 知行线有没有被有效破坏
+- 量价节奏有没有继续顺
+- 回撤是否仍属于洗盘而不是结构失败
 
 ---
 

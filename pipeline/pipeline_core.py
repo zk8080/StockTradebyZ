@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import logging
+import os
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -23,6 +25,9 @@ import pandas as pd
 from tqdm import tqdm
 
 from Selector import AnySelector
+
+logger = logging.getLogger(__name__)
+_FORCE_SERIAL_ENV = "PIPELINE_FORCE_SERIAL"
 
 
 # =============================================================================
@@ -109,6 +114,37 @@ def _selector_worker(
     return code, passed_dates
 
 
+def _serial_mode_forced() -> bool:
+    value = os.getenv(_FORCE_SERIAL_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_prepare_tasks_serial(
+    tasks: List[tuple],
+    *,
+    desc: str,
+) -> Dict[str, pd.DataFrame]:
+    prepared: Dict[str, pd.DataFrame] = {}
+    for args in tqdm(tasks, total=len(tasks), desc=desc, ncols=80):
+        code, df_out = _prepare_worker(args)
+        if df_out is not None:
+            prepared[code] = df_out
+    return prepared
+
+
+def _run_selector_tasks_serial(
+    tasks: List[tuple],
+    *,
+    desc: str,
+) -> Dict[pd.Timestamp, List[str]]:
+    picks: Dict[pd.Timestamp, List[str]] = defaultdict(list)
+    for args in tqdm(tasks, total=len(tasks), desc=desc, ncols=80):
+        code, passed_dates = _selector_worker(args)
+        for d in passed_dates:
+            picks[d].append(code)
+    return picks
+
+
 # =============================================================================
 # MarketDataPreparer
 # =============================================================================
@@ -140,8 +176,18 @@ class MarketDataPreparer:
              self.warmup_bars, self.n_turnover_days, self.selector)
             for code, df in data.items()
         ]
+        if _serial_mode_forced():
+            logger.info("检测到 %s，准备数据改为串行执行。", _FORCE_SERIAL_ENV)
+            return _run_prepare_tasks_serial(tasks, desc="准备数据 (serial)")
+
         prepared: Dict[str, pd.DataFrame] = {}
-        with ProcessPoolExecutor(max_workers=self.n_jobs) as ex:
+        try:
+            ex = ProcessPoolExecutor(max_workers=self.n_jobs)
+        except (PermissionError, OSError) as exc:
+            logger.warning("ProcessPool 不可用（%s），准备数据回退为串行执行。", exc)
+            return _run_prepare_tasks_serial(tasks, desc="准备数据 (serial)")
+
+        with ex:
             futures = {ex.submit(_prepare_worker, args): args[0] for args in tasks}
             for fut in tqdm(as_completed(futures), total=len(futures),
                             desc="准备数据 (mp)", ncols=80):
@@ -162,8 +208,18 @@ class MarketDataPreparer:
              self.warmup_bars, self.n_turnover_days, None)
             for code, df in data.items()
         ]
+        if _serial_mode_forced():
+            logger.info("检测到 %s，基础数据准备改为串行执行。", _FORCE_SERIAL_ENV)
+            return _run_prepare_tasks_serial(tasks, desc="基础数据准备 (serial)")
+
         prepared: Dict[str, pd.DataFrame] = {}
-        with ProcessPoolExecutor(max_workers=self.n_jobs) as ex:
+        try:
+            ex = ProcessPoolExecutor(max_workers=self.n_jobs)
+        except (PermissionError, OSError) as exc:
+            logger.warning("ProcessPool 不可用（%s），基础数据准备回退为串行执行。", exc)
+            return _run_prepare_tasks_serial(tasks, desc="基础数据准备 (serial)")
+
+        with ex:
             futures = {ex.submit(_prepare_worker, args): args[0] for args in tasks}
             for fut in tqdm(as_completed(futures), total=len(futures),
                             desc="基础数据准备 (mp)", ncols=80):
@@ -364,8 +420,20 @@ class SelectorPickPrecomputer:
              self.start_date, self.end_date, pool_sets2)
             for code in codes
         ]
-        Executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
-        with Executor(max_workers=self.n_jobs) as ex:
+        if _serial_mode_forced():
+            logger.info("检测到 %s，选股预计算改为串行执行。", _FORCE_SERIAL_ENV)
+            return _run_selector_tasks_serial(tasks, desc="选股预计算 (serial)")
+
+        if use_threads:
+            ex = ThreadPoolExecutor(max_workers=self.n_jobs)
+        else:
+            try:
+                ex = ProcessPoolExecutor(max_workers=self.n_jobs)
+            except (PermissionError, OSError) as exc:
+                logger.warning("ProcessPool 不可用（%s），选股预计算回退为串行执行。", exc)
+                return _run_selector_tasks_serial(tasks, desc="选股预计算 (serial)")
+
+        with ex:
             futures = {ex.submit(_selector_worker, args): args[0] for args in tasks}
             for fut in as_completed(futures):
                 code, passed_dates = fut.result()

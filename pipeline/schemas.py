@@ -13,7 +13,7 @@ class Candidate:
     """单只候选股票的结构化信息。"""
     code: str                          # 股票代码，如 "600519"
     date: str                          # 选股日期，ISO 格式 "YYYY-MM-DD"
-    strategy: str                      # 来源策略，如 "b1" / "brick"
+    strategy: str                      # 来源策略，如 "b1" / "b1_legacy" / "brick"
     close: float                       # 选股日收盘价
     turnover_n: float                  # 滚动成交额（流动性代理）
     brick_growth: Optional[float] = None   # 砖型图增长倍数（仅 brick 策略有效）

@@ -10,17 +10,82 @@ global:
   n_turnover_days: 43             # 滚动成交额窗口（日）
   min_bars_buffer: 10             # 额外的最小 bar 缓冲
 
-# ── B1 策略参数（KDJ + 知行均线多头排列） ────────────────────────────
+# ── 当前正式 B1（原 B1-E，启动/早期 B1）────────────────────────────
 b1:
   enabled: true
   zx_m1: 14
   zx_m2: 28
   zx_m3: 57
   zx_m4: 114
+  zxdq_span: 10
+  kdj_n: 9
+  j_threshold: 15.0
+  j_q_threshold: 0.10
+  lookback_days: 30
+  retest_lookback_days: 5
+  vol_ma_days: 5
+  up_expand_volume_factor: 1.3
+  down_shrink_volume_factor: 0.95
+  down_shrink_return_floor: -0.03
+  distribution_return_threshold: -0.03
+  distribution_volume_factor: 1.2
+  reject_distribution_days: 2
+  heavy_breakdown_volume_factor: 1.2
+  max_break_days: 1
+  volume_impulse:
+    enabled: true
+    lookback_days: 30
+    soft_volume_ratio: 1.6        # volume / prev_volume >= 1.6 记为 soft impulse
+    strict_volume_ratio: 2.0      # volume / prev_volume >= 2.0 记为 strict impulse
+    min_return: 0.015             # 至少要有一定实体涨幅，避免“微涨假放量”
+    min_close_position: 0.60      # (close - low) / (high - low)
+    max_upper_shadow_ratio: 0.35  # 上影 / 当日振幅
+    high_area_threshold: 0.75     # 处于最近窗口价格区间顶部 25% 的 impulse 仅轻度奖励
+    fresh_days: 8                 # 最近 8 根 K 内出现 impulse，计入新鲜度加分
+    stale_days: 12                # 超过 12 根 K 未再出现，递减处理
+    strong_ratio: 2.2             # >= 2.2 视为强 impulse
+    explosive_ratio: 3.0          # >= 3.0 视为爆发级 impulse
+    neutral_score: 4              # 无 impulse 时给低配中性分，避免新模块过度压制
+  top_distribution:
+    enabled: true
+    recent_window_days: 10         # 最近 10 个交易日内，回看顶部放量疑似派发柱
+    top_lookback_days: 20          # 用最近 20 日高点定义“高位/顶部区域”
+    confirm_days: 3                # 后续 1-3 日若无强延续、反而回落，则按派发硬排除
+    high_volume_factor: 1.75       # volume > vol_ma5 * 1.75
+    top_close_to_high_ratio: 0.91  # 收盘仍在 recent_high 的 91% 以上，仍属高位区
+    top_high_to_high_ratio: 0.98   # 或当日最高价已经逼近/触及 recent_high
+    upper_shadow_ratio: 0.50       # 长上影阈值（上影占当日振幅）
+    small_return_threshold: 0.03   # 巨量但涨幅 <= 3% 视为高位滞涨/承接偏弱
+    continuation_high_ratio: 1.005 # 后续最高价至少再高出 0.5% 才算强延续
+    pullback_close_ratio: 0.97     # 否则若后续最低收盘 <= 该柱收盘的 97%，确认偏派发
+  weekly_tag:
+    enabled: true
+    wma_short: 20
+    wma_mid: 60
+    wma_long: 120
+  score:
+    version: v4
+    weights:
+      volume_alignment: 18
+      down_shrink: 22
+      up_expand: 22
+      zx_retest: 26
+      volume_impulse: 12
+      center_uplift: 0            # 中枢抬升仅保留为诊断指标，默认不参与总分
+
+# ── legacy / 确认版旧 B1（仅供对比研究，默认不参与正式初选）───────────
+b1_legacy:
+  enabled: false
+  zx_m1: 14
+  zx_m2: 28
+  zx_m3: 57
+  zx_m4: 114
+  zxdq_span: 10
+  kdj_n: 9
   j_threshold: 15.0
   j_q_threshold: 0.10
 
-# ── B2 策略参数（B1超跌位启动确认） ──────────────────────────────────
+# ── B2 策略参数（当前正式 B1 启动后的确认）──────────────────────────
 b2:
   enabled: true
   b1_lookback_days: 3

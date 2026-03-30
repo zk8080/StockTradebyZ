@@ -6,9 +6,13 @@ pipeline/cli.py
   python -m pipeline.cli preselect
   python -m pipeline.cli preselect --date 2025-12-31
   python -m pipeline.cli preselect --config config/rules_preselect.yaml --data data/raw
+  python -m pipeline.cli b1-eval --code 300683 --date 2026-03-23
+  python -m pipeline.cli b1-legacy-eval --code 300683 --date 2026-03-23
 
 子命令：
-  preselect   运行量化初选，写入 data/candidates/
+  preselect        运行量化初选，写入 data/candidates/
+  b1-eval          评估单只股票在指定日期的当前正式 B1（原 B1-E）
+  b1-legacy-eval   评估单只股票在指定日期的 legacy/确认版旧 B1
 """
 from __future__ import annotations
 
@@ -21,7 +25,12 @@ from pathlib import Path
 # 将 pipeline 目录加入 path（直接用 python cli.py 时需要）
 sys.path.insert(0, str(Path(__file__).parent))
 
-from select_stock import run_preselect, resolve_preselect_output_dir
+from select_stock import (
+    evaluate_b1_for_code,
+    evaluate_b1_legacy_for_code,
+    run_preselect,
+    resolve_preselect_output_dir,
+)
 from schemas import CandidateRun
 from pipeline_io import save_candidates
 
@@ -102,6 +111,70 @@ def cmd_preselect(args: argparse.Namespace) -> None:
         print("\n(今日无候选股票)")
 
 
+def _print_eval_result(title: str, result: dict, strategy_note: str) -> None:
+    print(f"\n[{title}]")
+    print(f"strategy        : {result.get('strategy', '—')}")
+    print(f"note            : {strategy_note}")
+    print(f"code            : {result['code']}")
+    print(f"requested_date  : {result['requested_date']}")
+    print(f"resolved_date   : {result['resolved_date']}")
+    print(f"hit             : {'YES' if result['hit'] else 'NO'}")
+    print(f"close           : {result['close']:.3f}")
+    print(f"turnover_n      : {result['turnover_n']:.3f}")
+    print(f"score_total     : {result.get('score_total')}")
+    print("scores          :")
+    if result.get("scores"):
+        for key, val in result["scores"].items():
+            print(f"  - {key}: {val}")
+    else:
+        print("  - n/a")
+
+    print("hard_filters    :")
+    if result.get("hard_filter_reasons"):
+        for reason in result["hard_filter_reasons"]:
+            print(f"  - {reason}")
+    else:
+        print("  - PASS")
+
+    print("metrics         :")
+    for key, val in result.get("metrics", {}).items():
+        print(f"  - {key}: {val}")
+
+
+def cmd_b1_eval(args: argparse.Namespace) -> None:
+    """评估单只股票在指定日期的当前正式 B1 命中与分数。"""
+    try:
+        result = evaluate_b1_for_code(
+            code=args.code,
+            pick_date=args.date,
+            config_path=args.config or None,
+            data_dir=args.data or None,
+            end_date=args.end_date or None,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("B1 评估失败: %s", exc)
+        sys.exit(1)
+
+    _print_eval_result("B1 Eval", result, "当前正式 B1（原 B1-E / 启动版）")
+
+
+def cmd_b1_legacy_eval(args: argparse.Namespace) -> None:
+    """评估单只股票在指定日期的 legacy/确认版旧 B1。"""
+    try:
+        result = evaluate_b1_legacy_for_code(
+            code=args.code,
+            pick_date=args.date,
+            config_path=args.config or None,
+            data_dir=args.data or None,
+            end_date=args.end_date or None,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("B1 legacy 评估失败: %s", exc)
+        sys.exit(1)
+
+    _print_eval_result("B1 Legacy Eval", result, "legacy / 确认版旧 B1，仅供对比研究")
+
+
 # =============================================================================
 # CLI 解析
 # =============================================================================
@@ -123,6 +196,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log-dir", dest="log_dir", default=None,
                    help="流水日志目录（默认 data/logs/）")
 
+    p = sub.add_parser(
+        "b1-eval",
+        aliases=["b1e-eval"],
+        help="评估单只股票在指定日期的当前正式 B1（原 B1-E）",
+    )
+    p.add_argument("--code", required=True, help="股票代码，如 300683")
+    p.add_argument("--date", required=True, help="评估日期 YYYY-MM-DD")
+    p.add_argument("--config", default=None, help="rules_preselect.yaml 路径")
+    p.add_argument("--data", default=None, help="CSV 数据目录（覆盖配置文件）")
+    p.add_argument("--end-date", dest="end_date", default=None,
+                   help="数据截断日期（回看用）")
+
+    p = sub.add_parser("b1-legacy-eval", help="评估单只股票在指定日期的 legacy/确认版旧 B1")
+    p.add_argument("--code", required=True, help="股票代码，如 300683")
+    p.add_argument("--date", required=True, help="评估日期 YYYY-MM-DD")
+    p.add_argument("--config", default=None, help="rules_preselect.yaml 路径")
+    p.add_argument("--data", default=None, help="CSV 数据目录（覆盖配置文件）")
+    p.add_argument("--end-date", dest="end_date", default=None,
+                   help="数据截断日期（回看用）")
+
     return parser
 
 
@@ -132,6 +225,10 @@ def main() -> None:
 
     if args.command == "preselect":
         cmd_preselect(args)
+    elif args.command in {"b1-eval", "b1e-eval"}:
+        cmd_b1_eval(args)
+    elif args.command == "b1-legacy-eval":
+        cmd_b1_legacy_eval(args)
     else:
         parser.print_help()
         sys.exit(1)

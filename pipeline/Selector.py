@@ -23,6 +23,7 @@ Selector 一览
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol, Sequence
 
@@ -30,12 +31,14 @@ import numpy as np
 import pandas as pd
 from numba import njit as _njit
 
+_NUMBA_CACHE_ENABLED = os.environ.get("SELECTOR_NUMBA_CACHE", "").strip().lower() in {"1", "true", "yes"}
+
 # =============================================================================
 # Numba 加速核心函数
 # =============================================================================
 
 # ── KDJ 核心递推 ──────────────────────────────────────────────────────────
-@_njit(cache=True)
+@_njit(cache=_NUMBA_CACHE_ENABLED)
 def _kdj_core(rsv: np.ndarray) -> tuple:          # noqa: UP006
     n = len(rsv)
     K = np.empty(n, dtype=np.float64)
@@ -48,7 +51,7 @@ def _kdj_core(rsv: np.ndarray) -> tuple:          # noqa: UP006
     return K, D, J
 
 # ── 连续绿柱计数 ──────────────────────────────────────────────────────────
-@_njit(cache=True)
+@_njit(cache=_NUMBA_CACHE_ENABLED)
 def _green_run(brick_vals: np.ndarray) -> np.ndarray:
     """green_run[i] = 截至 i-1 连续绿柱根数（brick < 0）。"""
     n = len(brick_vals)
@@ -61,7 +64,7 @@ def _green_run(brick_vals: np.ndarray) -> np.ndarray:
     return out
 
 # ── 成交量最大日非阴线核心 ───────────────────────────────────────────────
-@_njit(cache=True)
+@_njit(cache=_NUMBA_CACHE_ENABLED)
 def _max_vol_not_bearish(
     vol: np.ndarray, open_: np.ndarray, close: np.ndarray, n: int,
 ) -> np.ndarray:
@@ -80,7 +83,7 @@ def _max_vol_not_bearish(
     return mask
 
 # ── 砖型图核心 ────────────────────────────────────────────────────────────
-@_njit(cache=True)
+@_njit(cache=_NUMBA_CACHE_ENABLED)
 def _compute_brick_numba(
     high: np.ndarray, low: np.ndarray, close: np.ndarray,
     n: int, m1: int, m2: int, m3: int,
