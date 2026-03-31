@@ -217,6 +217,44 @@ python scripts/run_b1_review_flow.py --skip-export
 - 定位为“解释器为主、轻筛选为辅”
 - 输出到 `data/review_b1/日期/`
 
+### 盘后总流程最小入口（项目侧）
+
+如果你只想在项目侧串起“抓盘后数据 → preselect → B1 AI复评”，可使用：
+
+~~~bash
+python scripts/run_daily_postclose_selection.py
+~~~
+
+可选：
+
+~~~bash
+python scripts/run_daily_postclose_selection.py --skip-fetch
+python scripts/run_daily_postclose_selection.py --skip-b1-review
+python scripts/run_daily_postclose_selection.py --reviewer gemini
+python scripts/run_daily_postclose_selection.py --fetch-limit 200 --fetch-concurrency 20
+~~~
+
+这个入口**只负责项目侧结果生成**，不会直连 Feishu 写表。
+
+运行完成后会：
+- 刷新 `data/candidates/candidates_latest.json`
+- 刷新 `data/candidates/candidates_YYYY-MM-DD.json`
+- 按需生成 `data/review_b1/YYYY-MM-DD/`
+- 输出机器可读摘要 JSON
+- 将摘要保存到：
+  - `data/postclose/YYYY-MM-DD/summary.json`
+  - `data/postclose/latest_summary.json`
+
+摘要中至少包含：
+- `pick_date`
+- `raw_max_date`
+- `preselect_done`
+- `candidate_count`
+- `b1_count`
+- `b1_ai_review_done`
+- `b1_ai_review_count`
+- `final_ready_for_bitable_sync`
+
 ---
 
 ## 5. 关键配置建议
