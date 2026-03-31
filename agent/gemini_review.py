@@ -95,15 +95,22 @@ class GeminiReviewer(BaseReviewer):
         data = path.read_bytes()
         return types.Part.from_bytes(data=data, mime_type=mime_type)
 
-    def review_stock(self, code: str, day_chart: Path, prompt: str) -> dict:
+    def review_stock(self, code: str, day_chart: Path, prompt: str, candidate: dict | None = None) -> dict:
         """
         调用 Gemini API，对单支股票进行图表分析，返回解析后的 JSON 结果。
         """
-        user_text = (
-            f"股票代码：{code}\n\n"
-            "以下是该股票的 **日线图**，请按照系统提示中的框架进行分析，"
-            "并严格按照要求输出 JSON。"
-        )
+        extra = (candidate or {}).get("extra", {}) or {}
+        matched = extra.get("matched_strategies") or ([candidate.get("strategy")] if isinstance(candidate, dict) and candidate.get("strategy") else [])
+        context_lines = [f"股票代码：{code}"]
+        if candidate:
+            context_lines.append(f"候选主策略：{candidate.get('strategy', '')}")
+            if matched:
+                context_lines.append(f"命中策略列表：{','.join(str(x) for x in matched)}")
+            if extra.get("b1_score") is not None:
+                context_lines.append(f"B1分：{extra.get('b1_score')}")
+        context_lines.append("")
+        context_lines.append("以下是该股票的 **日线图**，请按照系统提示中的框架进行分析，并严格按照要求输出 JSON。")
+        user_text = "\n".join(context_lines)
 
         parts: list[types.Part] = [
             types.Part.from_text(text="【日线图】"),
@@ -124,7 +131,7 @@ class GeminiReviewer(BaseReviewer):
         if response_text is None:
             raise RuntimeError(f"Gemini 返回空响应，无法解析 JSON（code={code}）")
 
-        result = self.extract_json(response_text)
+        result = self.normalize_result(self.extract_json(response_text))
         result["code"] = code  # 附加股票代码便于追溯
         return result
 

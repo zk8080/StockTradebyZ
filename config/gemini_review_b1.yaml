@@ -1,0 +1,16 @@
+# gemini_review_b1.yaml
+# B1 专用 Gemini AI 复评配置（只复评 B1 分数 >= 80 的候选）
+
+candidates: data/candidates/candidates_latest.json
+kline_dir: data/kline
+output_dir: data/review_b1
+prompt_path: agent/prompt_b1_review_v1.md
+model: gemini-3.1-pro-preview
+request_delay: 5
+skip_existing: false
+suggest_min_score: 4.0
+required_matched_strategies:
+  - b1
+matched_strategy_mode: all
+min_b1_score: 80
+sort_by: b1_score_desc

@@ -1,0 +1,58 @@
+# model_review_b1.yaml
+# B1 专用 AI 复评配置（只复评 B1 分数 >= 80 的候选）
+
+# 候选列表 JSON
+candidates: data/candidates/candidates_latest.json
+
+# 候选图表目录（其下按 pick_date 分目录）
+kline_dir: data/kline
+
+# B1 复评输出目录
+output_dir: data/review_b1
+
+# B1 专用提示词
+prompt_path: agent/prompt_b1_review_v1.md
+
+# 结果归一化：按 B1 提示词中的维度权重回算 total_score
+review_schema: b1
+score_weights:
+  pattern_fit: 0.25
+  volume_pattern_quality: 0.30
+  zxdkx_integrity: 0.15
+  restart_momentum: 0.20
+  risk_reward: 0.10
+
+# B1 标签一致性：当核心三维与总分都已接近用户认可样本时，
+# 允许归一化把过于保守的 borderline_b1 拉回 standard_b1。
+b1_label_consistency:
+  promote_standard_min_total_score: 3.8
+  promote_standard_min_similarity: 4
+  promote_standard_min_pattern_fit: 4
+  promote_standard_min_volume_pattern_quality: 4
+  promote_standard_min_restart_momentum: 4
+  promote_standard_min_zxdkx_integrity: 3
+
+# OpenAI 兼容模型名称
+model: gpt-4o-mini
+
+# OpenAI 兼容 API Base URL（留空使用官方）
+base_url: ""
+
+# API 风格：responses | chat_completions
+api_style: responses
+
+# 相邻 API 调用间隔（秒）
+request_delay: 5
+
+# true: 跳过已存在单股 JSON（断点续跑）
+skip_existing: false
+
+# 汇总推荐最小分数门槛（保留兼容字段）
+suggest_min_score: 4.0
+
+# 候选过滤：只复评命中 B1 且 B1分 >= 80 的股票
+required_matched_strategies:
+  - b1
+matched_strategy_mode: all
+min_b1_score: 80
+sort_by: b1_score_desc

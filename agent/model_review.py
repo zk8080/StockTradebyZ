@@ -213,12 +213,19 @@ class ModelReviewer(BaseReviewer):
         )
         return self._extract_text_from_response(response)
 
-    def review_stock(self, code: str, day_chart: Path, prompt: str) -> dict:
-        user_text = (
-            f"股票代码：{code}\n\n"
-            "以下是该股票的 **日线图**，请按照系统提示中的框架进行分析，"
-            "并严格按照要求输出 JSON。"
-        )
+    def review_stock(self, code: str, day_chart: Path, prompt: str, candidate: dict | None = None) -> dict:
+        extra = (candidate or {}).get("extra", {}) or {}
+        matched = extra.get("matched_strategies") or ([candidate.get("strategy")] if isinstance(candidate, dict) and candidate.get("strategy") else [])
+        context_lines = [f"股票代码：{code}"]
+        if candidate:
+            context_lines.append(f"候选主策略：{candidate.get('strategy', '')}")
+            if matched:
+                context_lines.append(f"命中策略列表：{','.join(str(x) for x in matched)}")
+            if extra.get("b1_score") is not None:
+                context_lines.append(f"B1分：{extra.get('b1_score')}")
+        context_lines.append("")
+        context_lines.append("以下是该股票的 **日线图**，请按照系统提示中的框架进行分析，并严格按照要求输出 JSON。")
+        user_text = "\n".join(context_lines)
 
         image_url = self.image_to_data_url(day_chart)
         api_style = str(self.config.get("api_style", "responses")).strip().lower()
@@ -237,7 +244,7 @@ class ModelReviewer(BaseReviewer):
                 if not response_text:
                     raise RuntimeError(f"模型返回空响应，无法解析 JSON（code={code}）")
 
-                result = self.extract_json(response_text)
+                result = self.normalize_result(self.extract_json(response_text))
                 result["code"] = code
                 return result
             except Exception as e:

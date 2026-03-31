@@ -189,6 +189,34 @@ python agent/model_review.py --config config/model_review.yaml
 - data/review/日期/代码.json
 - data/review/日期/suggestion.json
 
+### B1 专用 AI 复评（仅复评 B1分 >= 80）
+
+如果你要运行 B1 专用复评，而不是通用图表复评，可使用：
+
+~~~bash
+python scripts/run_b1_review_flow.py
+~~~
+
+可选：
+
+~~~bash
+python scripts/run_b1_review_flow.py --reviewer gemini
+python scripts/run_b1_review_flow.py --skip-export
+~~~
+
+对应配置：
+- `config/model_review_b1.yaml`
+- `config/gemini_review_b1.yaml`
+
+对应提示词：
+- `agent/prompt_b1_review_v1.md`
+
+当前 B1 专用复评口径：
+- 只复评 `matched_strategies` 含 `b1` 且 `b1_score >= 80` 的候选
+- 使用用户定义的“理想 B1”样本做 few-shot 锚定
+- 定位为“解释器为主、轻筛选为辅”
+- 输出到 `data/review_b1/日期/`
+
 ---
 
 ## 5. 关键配置建议

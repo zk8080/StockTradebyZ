@@ -42,6 +42,7 @@
 }
 .strategy-brick { background: #d4f5e2; color: #1a7f37; }
 .strategy-b1    { background: #daeeff; color: #0969da; }
+.strategy-b1_legacy { background: #eef1f4; color: #57606a; }
 
 .candidate-meta {
     font-size: 0.82rem;
