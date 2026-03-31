@@ -104,8 +104,10 @@ python run_all.py --start-from 3
 
 参数说明：
 
-- `--skip-fetch`：跳过数据下载，直接进入初选
+- `--skip-fetch`：跳过数据下载，直接进入初选；**仅在你已确认 `data/raw/*.csv` 已更新到最新交易日时使用**
 - `--start-from N`：从第 N 步开始执行（1 到 4）
+
+> 默认推荐直接运行 `python run_all.py`，先刷新最新 K 线，再做 preselect，避免 `pick_date` 卡在旧交易日。
 
 ### 3.5 重要说明：`run_all.py` 不负责写飞书表格
 `run_all.py` 跑完后，只表示以下产物已经生成：

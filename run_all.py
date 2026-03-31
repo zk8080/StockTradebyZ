@@ -3,15 +3,15 @@ run_all.py
 ~~~~~~~~~~
 一键运行完整交易选股流程：
 
-  步骤 1  pipeline/fetch_kline.py   — 拉取最新 K 线数据
-  步骤 2  pipeline/cli.py preselect — 量化初选，生成候选列表
+  步骤 1  pipeline/fetch_kline_tdx_api.py — 拉取最新 K 线数据
+  步骤 2  pipeline/cli.py preselect      — 量化初选，生成候选列表
   步骤 3  dashboard/export_kline_charts.py — 导出候选股 K 线图
-  步骤 4  agent/model_review.py     — OpenAI 兼容图表分析评分
+  步骤 4  agent/model_review.py           — OpenAI 兼容图表分析评分
   步骤 5  打印推荐购买的股票
 
 用法：
     python run_all.py
-    python run_all.py --skip-fetch     # 跳过行情下载（已有最新数据时）
+    python run_all.py --skip-fetch     # 仅在已确认 raw 数据最新时使用
     python run_all.py --start-from 3   # 从第 3 步开始（跳过前两步）
 """
 from __future__ import annotations
@@ -116,7 +116,6 @@ def main() -> None:
                 "--all-a",
                 "--limit", "200",
                 "--concurrency", "20",
-                "--skip-existing",
             ],
         )
 
