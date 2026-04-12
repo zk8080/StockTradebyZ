@@ -158,7 +158,7 @@ brick_reversal_xg:
 
 # ── 砖型图（BrickChart）策略参数 ──────────────────────────────────────
 brick:
-  enabled: true
+  enabled: false
 
   score:
     version: v1

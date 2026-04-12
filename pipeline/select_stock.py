@@ -1704,20 +1704,28 @@ def run_brick_reversal_xg(
             ) / 4.0
             pf["xg_yellow_line"] = zxdk
 
-            c7 = compute_brick_chart(
-                pf,
-                n=int(cfg_xg.get("n", 4)),
-                m1=int(cfg_xg.get("m1", 4)),
-                m2=int(cfg_xg.get("m2", 6)),
-                m3=int(cfg_xg.get("m3", 6)),
-                t=float(cfg_xg.get("t", 4.0)),
-                shift1=float(cfg_xg.get("shift1", 90.0)),
-                shift2=float(cfg_xg.get("shift2", 100.0)),
-                sma_w1=int(cfg_xg.get("sma_w1", 1)),
-                sma_w2=int(cfg_xg.get("sma_w2", 1)),
-                sma_w3=int(cfg_xg.get("sma_w3", 1)),
-            )
-            pf["xg_brick"] = c7
+            xg_n = int(cfg_xg.get("n", 4))
+            xg_m1 = int(cfg_xg.get("m1", 4))
+            xg_m2 = int(cfg_xg.get("m2", 6))
+            xg_m3 = int(cfg_xg.get("m3", 6))
+            xg_t = float(cfg_xg.get("t", 4.0))
+            xg_shift1 = float(cfg_xg.get("shift1", 90.0))
+            xg_shift2 = float(cfg_xg.get("shift2", 100.0))
+            xg_sma_w1 = int(cfg_xg.get("sma_w1", 1))
+            xg_sma_w2 = int(cfg_xg.get("sma_w2", 1))
+            xg_sma_w3 = int(cfg_xg.get("sma_w3", 1))
+
+            hhv = pf["high"].rolling(xg_n, min_periods=1).max()
+            llv = pf["low"].rolling(xg_n, min_periods=1).min()
+            rng = (hhv - llv).replace(0, 0.01)
+
+            var1a = (hhv - pf["close"]) / rng * 100.0 - xg_shift1
+            var2a = var1a.ewm(alpha=xg_sma_w1 / xg_m1, adjust=False).mean() + xg_shift2
+            var3a = (pf["close"] - llv) / rng * 100.0
+            var4a = var3a.ewm(alpha=xg_sma_w2 / xg_m2, adjust=False).mean()
+            var5a = var4a.ewm(alpha=xg_sma_w3 / xg_m3, adjust=False).mean() + xg_shift2
+            var6a = var5a - var2a
+            pf["xg_brick"] = np.where(var6a > xg_t, var6a - xg_t, 0.0)
 
             row = pf.iloc[int(loc)]
             prev = pf.iloc[int(loc) - 1]
@@ -1733,12 +1741,20 @@ def run_brick_reversal_xg(
             c0 = float(row.get("xg_brick", 0.0))
             c1 = float(prev.get("xg_brick", 0.0))
             c2 = float(prev2.get("xg_brick", 0.0))
-            today_red = c0 > c1
-            yesterday_green = c1 < c2
+
+            aa_today = c1 < c0
+            aa_yesterday = c2 < c1
+            xg_first_red = (not aa_yesterday) and aa_today
+            if not xg_first_red:
+                continue
+
             red_height = c0 - c1
-            green_height = c2 - c1
-            height_ok = red_height >= green_height * height_ratio
-            if not (yesterday_green and today_red and height_ok):
+            prev_fall_height = max(c2 - c1, 0.0)
+            if prev_fall_height <= 0:
+                height_ok = red_height > 0
+            else:
+                height_ok = red_height >= prev_fall_height * height_ratio
+            if not height_ok:
                 continue
 
             extra = {
@@ -1747,17 +1763,21 @@ def run_brick_reversal_xg(
                 "xg_brick_prev": round(c1, 6),
                 "xg_brick_prev2": round(c2, 6),
                 "xg_red_height": round(red_height, 6),
-                "xg_green_height": round(green_height, 6),
-                "xg_height_ratio_need": round(green_height * height_ratio, 6),
-                "xg_yesterday_green": yesterday_green,
-                "xg_today_red": today_red,
+                "xg_green_height": round(prev_fall_height, 6),
+                "xg_prev_fall_height": round(prev_fall_height, 6),
+                "xg_height_ratio_need": round(prev_fall_height * height_ratio, 6),
+                "xg_aa_today": aa_today,
+                "xg_aa_yesterday": aa_yesterday,
+                "xg_first_red": xg_first_red,
+                "xg_yesterday_green": not aa_yesterday,
+                "xg_today_red": aa_today,
                 "xg_height_ok": height_ok,
                 "xg_yellow_ok": yellow_ok,
             }
             extra.update(
                 _score_xg_metrics(
                     red_height=red_height,
-                    green_height=green_height,
+                    green_height=prev_fall_height,
                     close=float(row["close"]),
                     yellow_line=yellow,
                     brick_level=c0,
