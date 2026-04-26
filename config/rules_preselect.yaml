@@ -22,6 +22,9 @@ b1:
   j_threshold: 15.0
   j_q_threshold: 0.10
   lookback_days: 30
+  anchor_enabled: true
+  anchor_volume_ratio: 2.5
+  anchor_min_return: 0.04
   retest_lookback_days: 5
   vol_ma_days: 5
   up_expand_volume_factor: 1.3
@@ -155,6 +158,26 @@ brick_reversal_xg:
     yellow_margin_floor: 0.0
     yellow_margin_ceiling: 0.15
     brick_level_ceiling: 20
+
+# ── 单针下30（中期高位 + 短期急压）────────────────────────────────────
+single_pin_down_30:
+  enabled: true
+  short_window: 3
+  long_window: 21
+  long_threshold: 85
+  short_threshold: 30
+  alt_long_threshold: 80
+  alt_short_threshold: 20
+  score:
+    version: wash_context_v3
+    weights:
+      trend_strength: 0.22
+      wash_depth: 0.18
+      launch_context: 0.24
+      platform_tightness: 0.18
+      recovery_quality: 0.10
+      lower_shadow: 0.08
+    max_score: 100
 
 # ── 砖型图（BrickChart）策略参数 ──────────────────────────────────────
 brick:

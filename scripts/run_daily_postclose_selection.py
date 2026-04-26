@@ -73,6 +73,10 @@ def _hits_combo(row: dict[str, Any]) -> bool:
     return "b2_xg_combo" in matched or {"b2", "brick_reversal_xg"}.issubset(matched)
 
 
+def _hits_single_pin_down_30(row: dict[str, Any]) -> bool:
+    return "single_pin_down_30" in _matched_strategies(row)
+
+
 def _rel(path: Path) -> str:
     return str(path.relative_to(ROOT))
 
@@ -90,12 +94,14 @@ def _load_candidates_summary() -> dict[str, Any]:
     b1_candidates = [c for c in candidates if _hits_b1(c)]
     b2_candidates = [c for c in candidates if _hits_b2(c)]
     combo_candidates = [c for c in candidates if _hits_combo(c)]
+    single_pin_candidates = [c for c in candidates if _hits_single_pin_down_30(c)]
     return {
         "pick_date": pick_date,
         "candidate_count": len(candidates),
         "b1_count": len(b1_candidates),
         "b2_count": len(b2_candidates),
         "combo_count": len(combo_candidates),
+        "single_pin_down_30_count": len(single_pin_candidates),
         "latest_candidates_path": _rel(latest),
         "dated_candidates_path": _rel(dated),
         "dated_candidates_exists": dated.exists(),
@@ -207,6 +213,7 @@ def main() -> None:
         "b1_count": candidate_summary["b1_count"],
         "b2_count": candidate_summary["b2_count"],
         "combo_count": candidate_summary["combo_count"],
+        "single_pin_down_30_count": candidate_summary["single_pin_down_30_count"],
         "b1_ai_review_done": review_summary["b1_ai_review_done"],
         "b1_ai_review_count": review_summary["b1_ai_review_count"],
         "b1_ai_recommendation_count": review_summary["b1_ai_recommendation_count"],

@@ -245,6 +245,17 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return val if np.isfinite(val) else default
 
 
+def _safe_ratio(numerator: object, denominator: object, default: float = np.nan) -> float:
+    try:
+        num = float(numerator)
+        den = float(denominator)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(num) or not np.isfinite(den) or abs(den) <= 1e-12:
+        return default
+    return num / den
+
+
 def _normalize_linear(value: Optional[float], floor: float, ceiling: float) -> float:
     if value is None or not np.isfinite(value):
         return 0.0
@@ -457,6 +468,9 @@ def _normalize_b1_cfg(cfg_b1: Optional[dict] = None) -> dict:
         "j_threshold": float(raw.get("j_threshold", 15.0)),
         "j_q_threshold": float(raw.get("j_q_threshold", 0.10)),
         "lookback_days": base_lookback_days,
+        "anchor_enabled": bool(raw.get("anchor_enabled", True)),
+        "anchor_volume_ratio": float(raw.get("anchor_volume_ratio", 2.5)),
+        "anchor_min_return": float(raw.get("anchor_min_return", 0.04)),
         "retest_lookback_days": int(raw.get("retest_lookback_days", 5)),
         "vol_ma_days": int(raw.get("vol_ma_days", 5)),
         "up_expand_volume_factor": float(raw.get("up_expand_volume_factor", 1.3)),
@@ -550,10 +564,64 @@ def _calc_intraday_upper_shadow_ratio(
     return max(0.0, float(high_price - max(open_price, close_price)) / float(bar_range))
 
 
+def _calc_intraday_lower_shadow_ratio(
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+) -> float:
+    if not all(np.isfinite(val) for val in (open_price, high_price, low_price, close_price)):
+        return float("nan")
+    bar_range = high_price - low_price
+    if bar_range <= 0:
+        return 0.0
+    return max(0.0, float(min(open_price, close_price) - low_price) / float(bar_range))
+
+
+
+
+def _find_b1_anchor_loc(
+    pf: pd.DataFrame,
+    loc: int,
+    cfg: dict,
+) -> Optional[int]:
+    """Find the earliest anchor bar within the recent lookback window.
+
+    Anchor definition: within the recent lookback window, the first bar whose
+    volume is >= previous day volume * anchor_volume_ratio and whose daily
+    return is >= anchor_min_return.
+    """
+    lookback_days = max(5, int(cfg.get("lookback_days", 30)))
+    start_loc = max(1, loc - lookback_days + 1)
+    if not bool(cfg.get("anchor_enabled", True)):
+        return start_loc
+
+    anchor_volume_ratio = float(cfg.get("anchor_volume_ratio", 2.5))
+    anchor_min_return = float(cfg.get("anchor_min_return", 0.04))
+    window = pf.iloc[start_loc:loc + 1].copy()
+    if window.empty:
+        return start_loc
+
+    prev_volume = window["prev_volume"].astype(float) if "prev_volume" in window.columns else window["volume"].astype(float).shift(1)
+    daily_return = window["daily_return"].astype(float)
+    volume = window["volume"].astype(float)
+    mask = (
+        prev_volume.notna()
+        & (prev_volume > 0)
+        & (volume >= prev_volume * anchor_volume_ratio)
+        & (daily_return >= anchor_min_return)
+    )
+    positions = list(window.index[mask])
+    if not positions:
+        return start_loc
+    return int(pf.index.get_loc(positions[0]))
+
+
 def _detect_b1_top_distribution(
     pf: pd.DataFrame,
     loc: int,
     cfg: dict,
+    start_loc: Optional[int] = None,
 ) -> Optional[dict]:
     """识别近期高位巨量弱收且后续无强延续的派发型顶部柱。"""
     td_cfg = dict(cfg.get("top_distribution", {}))
@@ -563,7 +631,11 @@ def _detect_b1_top_distribution(
     recent_window_days = max(3, int(td_cfg.get("recent_window_days", 10)))
     top_lookback_days = max(5, int(td_cfg.get("top_lookback_days", 20)))
     confirm_days = max(1, int(td_cfg.get("confirm_days", 3)))
-    start_loc = max(top_lookback_days - 1, loc - recent_window_days)
+    start_loc_default = max(top_lookback_days - 1, loc - recent_window_days)
+    if start_loc is None:
+        start_loc = start_loc_default
+    else:
+        start_loc = max(int(start_loc), start_loc_default)
 
     for cand_loc in range(loc - 1, start_loc - 1, -1):
         bar = pf.iloc[cand_loc]
@@ -992,9 +1064,11 @@ def evaluate_b1_from_prepared(
             "hard_filter_reasons": [f"insufficient_history:need>{required_loc}_bars"],
         }
 
-    window20 = pf.iloc[loc - lookback_days + 1:loc + 1].copy()
+    anchor_loc = _find_b1_anchor_loc(pf, loc, cfg)
+    window_start_loc = max(loc - lookback_days + 1, anchor_loc)
+    window20 = pf.iloc[window_start_loc:loc + 1].copy()
     window5 = pf.iloc[loc - retest_days + 1:loc + 1].copy()
-    impulse_window = pf.iloc[loc - impulse_lookback_days + 1:loc + 1].copy()
+    impulse_window = pf.iloc[window_start_loc:loc + 1].copy()
     row = pf.iloc[loc]
 
     j_hist = pf["J"].iloc[:loc + 1].dropna().astype(float)
@@ -1038,7 +1112,7 @@ def evaluate_b1_from_prepared(
         )
     )
     distribution_days = int(distribution_mask.sum())
-    top_distribution_event = _detect_b1_top_distribution(pf, loc, cfg)
+    top_distribution_event = _detect_b1_top_distribution(pf, loc, cfg, start_loc=window_start_loc)
 
     hard_filter_reasons: List[str] = []
     if not j_low_ok:
@@ -1061,7 +1135,7 @@ def evaluate_b1_from_prepared(
         hard_filter_reasons.append("single_zx_break_not_shrink_volume")
     if distribution_days >= int(cfg["reject_distribution_days"]):
         hard_filter_reasons.append(
-            f"distribution_days_too_many:last{lookback_days}d={distribution_days},reject_if>={cfg['reject_distribution_days']}"
+            f"distribution_days_too_many:anchor_window={distribution_days},reject_if>={cfg['reject_distribution_days']}"
         )
     if heavy_breakdown_days > 0:
         hard_filter_reasons.append(f"heavy_breakdown_days:last{retest_days}d={heavy_breakdown_days}")
@@ -1162,6 +1236,8 @@ def evaluate_b1_from_prepared(
         "shrink_break_days_5d": shrink_break_days,
         "heavy_breakdown_days_5d": heavy_breakdown_days,
         "distribution_days_20d": distribution_days,
+        "anchor_start_date": pd.Timestamp(pf.index[window_start_loc]).strftime("%Y-%m-%d"),
+        "anchor_window_days": int(len(window20)),
         "center_uplift": round(center_uplift, 6) if np.isfinite(center_uplift) else None,
         "impulse_count_strict": int(volume_impulse_metrics["impulse_count_strict"]),
         "impulse_count_soft": int(volume_impulse_metrics["impulse_count_soft"]),
@@ -1198,6 +1274,8 @@ def evaluate_b1_from_prepared(
             "b1_score_weights": dict(cfg["score"]["weights"]),
             "b1_metrics": metrics,
             "b1_hard_filter_reasons": hard_filter_reasons,
+            "b1_anchor_start_date": pd.Timestamp(pf.index[window_start_loc]).strftime("%Y-%m-%d"),
+            "b1_anchor_window_days": int(len(window20)),
             "weekly_tag": weekly_tag,
         },
     }
@@ -1667,6 +1745,207 @@ def run_brick(
 
 
 # =============================================================================
+# 单针下30策略
+# =============================================================================
+
+def _score_single_pin_down_30(metrics: dict, score_cfg: Optional[dict] = None) -> dict:
+    score_cfg = score_cfg or {}
+    weights = score_cfg.get("weights", {})
+    max_score = _safe_float(score_cfg.get("max_score", 100), 100)
+
+    trend_weight = _safe_float(weights.get("trend_strength", 0.22), 0.22)
+    wash_weight = _safe_float(weights.get("wash_depth", 0.18), 0.18)
+    launch_weight = _safe_float(weights.get("launch_context", 0.24), 0.24)
+    platform_weight = _safe_float(weights.get("platform_tightness", 0.18), 0.18)
+    recovery_weight = _safe_float(weights.get("recovery_quality", 0.10), 0.10)
+    lower_shadow_weight = _safe_float(weights.get("lower_shadow", 0.08), 0.08)
+    total_weight = (
+        trend_weight + wash_weight + launch_weight + platform_weight + recovery_weight + lower_shadow_weight
+    )
+    if total_weight <= 0:
+        total_weight = 1.0
+
+    long_pos = _safe_float(metrics.get("long_pos"), 0.0)
+    short_pos = _safe_float(metrics.get("short_pos"), 100.0)
+    close_in_day = _safe_float(metrics.get("close_in_day"), 0.0)
+    lower_shadow_ratio = _safe_float(metrics.get("lower_shadow_ratio"), 0.0)
+    recent_launch_gain = _safe_float(metrics.get("recent_launch_gain"), 0.0)
+    platform_tightness = _safe_float(metrics.get("platform_tightness"), 1.0)
+    platform_hold = _safe_float(metrics.get("platform_hold"), 0.0)
+
+    trend_component = _clip01((long_pos - 80.0) / 20.0)
+    wash_component = _clip01((30.0 - short_pos) / 30.0)
+    launch_component = _clip01((recent_launch_gain - 0.04) / 0.08)
+    platform_tight_component = _clip01((0.08 - platform_tightness) / 0.08)
+    platform_hold_component = _clip01((platform_hold - 0.94) / 0.08)
+    platform_component = platform_tight_component * 0.55 + platform_hold_component * 0.45
+    recovery_component = _clip01((close_in_day - 0.22) / 0.5)
+    lower_shadow_component = _clip01(lower_shadow_ratio / 0.18)
+
+    weighted = (
+        trend_component * trend_weight
+        + wash_component * wash_weight
+        + launch_component * launch_weight
+        + platform_component * platform_weight
+        + recovery_component * recovery_weight
+        + lower_shadow_component * lower_shadow_weight
+    ) / total_weight
+    score = round(max_score * weighted, 1)
+
+    return {
+        "single_pin_down_30_score": score,
+        "single_pin_down_30_score_version": str(score_cfg.get("version", "wash_context_v3")),
+        "single_pin_down_30_score_breakdown": {
+            "trend_strength": round(max_score * (trend_component * trend_weight / total_weight), 1),
+            "wash_depth": round(max_score * (wash_component * wash_weight / total_weight), 1),
+            "launch_context": round(max_score * (launch_component * launch_weight / total_weight), 1),
+            "platform_tightness": round(max_score * (platform_component * platform_weight / total_weight), 1),
+            "recovery_quality": round(max_score * (recovery_component * recovery_weight / total_weight), 1),
+            "lower_shadow": round(max_score * (lower_shadow_component * lower_shadow_weight / total_weight), 1),
+        },
+    }
+
+
+def run_single_pin_down_30(
+    prepared: Dict[str, pd.DataFrame],
+    pick_date: pd.Timestamp,
+    pool_codes: List[str],
+    cfg_single_pin: Optional[dict] = None,
+) -> List[Candidate]:
+    cfg_single_pin = dict(cfg_single_pin or {})
+    short_window = int(cfg_single_pin.get("short_window", 3))
+    long_window = int(cfg_single_pin.get("long_window", 21))
+    long_threshold = _safe_float(cfg_single_pin.get("long_threshold", 85), 85)
+    short_threshold = _safe_float(cfg_single_pin.get("short_threshold", 30), 30)
+    alt_long_threshold = _safe_float(cfg_single_pin.get("alt_long_threshold", 80), 80)
+    alt_short_threshold = _safe_float(cfg_single_pin.get("alt_short_threshold", 20), 20)
+    score_cfg = dict(cfg_single_pin.get("score", {}))
+    date_str = pick_date.strftime("%Y-%m-%d")
+
+    candidates: List[Candidate] = []
+    for code in pool_codes:
+        df = prepared.get(code)
+        if df is None or pick_date not in df.index:
+            continue
+        try:
+            pf = df.copy().sort_index()
+            loc = pf.index.get_loc(pick_date)
+            if isinstance(loc, slice):
+                continue
+            loc = int(loc)
+            if loc < max(short_window, long_window) - 1:
+                continue
+
+            row = pf.iloc[loc]
+            short_slice = pf.iloc[loc - short_window + 1:loc + 1]
+            long_slice = pf.iloc[loc - long_window + 1:loc + 1]
+
+            short_low = float(short_slice["low"].min())
+            short_close_high = float(short_slice["close"].max())
+            long_low = float(long_slice["low"].min())
+            long_close_high = float(long_slice["close"].max())
+            close = float(row["close"])
+            open_ = float(row.get("open", close))
+            high = float(row.get("high", close))
+            low = float(row.get("low", close))
+
+            short_range = short_close_high - short_low
+            long_range = long_close_high - long_low
+            if abs(short_range) <= 1e-12 or abs(long_range) <= 1e-12:
+                continue
+            short_pos = (close - short_low) / short_range
+            long_pos = (close - long_low) / long_range
+            if not np.isfinite(short_pos) or not np.isfinite(long_pos):
+                continue
+            short_pos *= 100.0
+            long_pos *= 100.0
+
+            hit_primary = long_pos >= long_threshold and short_pos <= short_threshold
+            hit_alt = long_pos >= alt_long_threshold and short_pos <= alt_short_threshold
+            if not (hit_primary or hit_alt):
+                continue
+
+            intraday_range = high - low
+            if abs(intraday_range) <= 1e-12:
+                close_in_day = 0.5
+            else:
+                close_in_day = (close - low) / intraday_range
+            lower_shadow_ratio = _calc_intraday_lower_shadow_ratio(open_, high, low, close)
+            body_pct = abs(close - open_) / close if abs(close) > 1e-12 else 0.0
+
+            launch_slice = pf.iloc[max(0, loc - 6):loc]
+            if launch_slice.empty:
+                recent_launch_gain = 0.0
+            else:
+                launch_pct = ((launch_slice["close"] - launch_slice["open"]) / launch_slice["open"].replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+                recent_launch_gain = float(np.nanmax(launch_pct.to_numpy())) if launch_pct.notna().any() else 0.0
+
+            platform_slice = pf.iloc[max(0, loc - 3):loc]
+            if platform_slice.empty:
+                platform_tightness = 1.0
+                platform_hold = 0.0
+            else:
+                platform_high = float(platform_slice["high"].max())
+                platform_low = float(platform_slice["low"].min())
+                platform_mid_close = float(platform_slice["close"].mean())
+                platform_tightness = (platform_high - platform_low) / close if abs(close) > 1e-12 else 1.0
+                platform_hold = platform_mid_close / platform_high if abs(platform_high) > 1e-12 else 0.0
+
+            metrics = {
+                "long_pos": long_pos,
+                "short_pos": short_pos,
+                "close_in_day": close_in_day,
+                "lower_shadow_ratio": lower_shadow_ratio,
+                "recent_launch_gain": recent_launch_gain,
+                "platform_tightness": platform_tightness,
+                "platform_hold": platform_hold,
+            }
+
+            extra = {
+                "single_pin_down_30_short_window": short_window,
+                "single_pin_down_30_long_window": long_window,
+                "single_pin_down_30_short_pos": round(short_pos, 4),
+                "single_pin_down_30_long_pos": round(long_pos, 4),
+                "single_pin_down_30_close_in_day": round(close_in_day, 4),
+                "single_pin_down_30_lower_shadow_ratio": round(lower_shadow_ratio, 4),
+                "single_pin_down_30_body_pct": round(body_pct, 4),
+                "single_pin_down_30_recent_launch_gain": round(recent_launch_gain, 4),
+                "single_pin_down_30_platform_tightness": round(platform_tightness, 4),
+                "single_pin_down_30_platform_hold": round(platform_hold, 4),
+                "single_pin_down_30_short_threshold": short_threshold,
+                "single_pin_down_30_long_threshold": long_threshold,
+                "single_pin_down_30_alt_short_threshold": alt_short_threshold,
+                "single_pin_down_30_alt_long_threshold": alt_long_threshold,
+                "single_pin_down_30_hit_primary": hit_primary,
+                "single_pin_down_30_hit_alt": hit_alt,
+                "single_pin_down_30_tier": "strong" if hit_alt else "standard",
+            }
+            extra.update(_score_single_pin_down_30(metrics, score_cfg))
+
+            candidates.append(Candidate(
+                code=code,
+                date=date_str,
+                strategy="single_pin_down_30",
+                close=close,
+                turnover_n=float(row.get("turnover_n", 0.0)),
+                extra=extra,
+            ))
+        except Exception as exc:
+            logger.debug("SinglePinDown30 skip %s: %s", code, exc)
+
+    candidates.sort(
+        key=lambda c: (
+            -_safe_float((c.extra or {}).get("single_pin_down_30_score"), -999),
+            -_safe_float((c.extra or {}).get("single_pin_down_30_long_pos"), -999),
+            _safe_float((c.extra or {}).get("single_pin_down_30_short_pos"), 999),
+            str(c.code),
+        )
+    )
+    logger.info("SinglePinDown30 选出: %d 只", len(candidates))
+    return candidates
+
+
+# =============================================================================
 # B2 + Brick 组合策略
 # =============================================================================
 
@@ -1920,6 +2199,7 @@ def run_preselect(
     brick_candidates: List[Candidate] = []
     brick_reversal_xg_candidates: List[Candidate] = []
     b2_xg_combo_candidates: List[Candidate] = []
+    single_pin_down_30_candidates: List[Candidate] = []
 
     if cfg.get("b1", {}).get("enabled", True):
         b1_candidates = run_b1(prepared, pick_ts, pool_codes, cfg["b1"])
@@ -1945,8 +2225,12 @@ def run_preselect(
         b2_xg_combo_candidates = run_b2_brick(b2_candidates, brick_reversal_xg_candidates, cfg.get("b2_brick", {}))
         all_candidates.extend(b2_xg_combo_candidates)
 
-    # 7) 去重并保留多策略命中信息（优先级：b2_xg_combo > brick_reversal_xg > b2 > brick > b1 > b1_legacy）
-    priority = {"b2_xg_combo": 6, "brick_reversal_xg": 5, "b2": 4, "brick": 3, "b1": 2, "b1_legacy": 1}
+    if cfg.get("single_pin_down_30", {}).get("enabled", False):
+        single_pin_down_30_candidates = run_single_pin_down_30(prepared, pick_ts, pool_codes, cfg.get("single_pin_down_30", {}))
+        all_candidates.extend(single_pin_down_30_candidates)
+
+    # 7) 去重并保留多策略命中信息（优先级：b2_xg_combo > brick_reversal_xg > b2 > single_pin_down_30 > brick > b1 > b1_legacy）
+    priority = {"b2_xg_combo": 7, "brick_reversal_xg": 6, "b2": 5, "single_pin_down_30": 4, "brick": 3, "b1": 2, "b1_legacy": 1}
     merged: Dict[str, Candidate] = {}
 
     for c in all_candidates:
